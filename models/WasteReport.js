@@ -9,7 +9,7 @@ const WasteReportSchema = new mongoose.Schema(
     },
 
     wasteImage: {
-      type: String,
+      type: [String],
       required: true,
       trim: true,
     },
@@ -19,8 +19,13 @@ const WasteReportSchema = new mongoose.Schema(
       required: true,
       trim: true,
     },
+    landmark: {
+      type: String,
 
-    description: {   
+      trim: true,
+    },
+
+    description: {
       type: String,
       trim: true,
     },
@@ -28,7 +33,7 @@ const WasteReportSchema = new mongoose.Schema(
     wasteCategory: {
       type: String,
       required: true,
-      enum: ["PLASTIC", "ORGANIC", "PAPER", "OTHERS"], 
+      enum: ["PLASTIC", "ORGANIC", "PAPER", "OTHERS"],
     },
 
     status: {
@@ -45,8 +50,11 @@ const WasteReportSchema = new mongoose.Schema(
     resolvedAt: {
       type: Date,
     },
+
+    aiConfidence: { type: Number, default: null },
+    aiDistribution: { type: Array, default: [] },
   },
-  { timestamps: true }
+  { timestamps: true },
 );
 
 module.exports = mongoose.model("WasteReport", WasteReportSchema);

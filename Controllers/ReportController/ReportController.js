@@ -4,49 +4,141 @@ const authMiddleware = require("../../Middleware/AuthMiddleware");
 const roleMiddleware = require("../../Middleware/RoleBasedMiddlware");
 const WasteReport = require("../../models/WasteReport");
 const StudentsModel = require("../../models/StudentsModel");
-
+const axios = require("axios");
 const Router = express.Router();
+
+
+
+
+
+
+function analyzeWasteConcepts(concepts = []) {
+  const text = concepts.map((c) => (c.name || "").toLowerCase()).join(" | ");
+
+  const plasticKeys = ["plastic", "bottle", "bag", "wrapper", "cup", "polythene", "packet"];
+  const paperKeys = ["paper", "cardboard", "carton", "newspaper", "book", "magazine"];
+  const organicKeys = [
+    "food", "fruit", "banana", "vegetable", "peel", "organic", "leftover",
+    "garbage", "trash", "waste", "compost"
+  ];
+
+  const hasAny = (arr) => arr.some((k) => text.includes(k));
+
+  if (hasAny(plasticKeys)) return { category: "PLASTIC", isWaste: true };
+  if (hasAny(paperKeys)) return { category: "PAPER", isWaste: true };
+  if (hasAny(organicKeys)) return { category: "ORGANIC", isWaste: true };
+
+  return { category: "NOT_WASTE", isWaste: false };
+}
 
 Router.post(
   "/report/waste",
   authMiddleware,
-  upload.single("wasteImage"),
+  upload.array("wasteImage", 5),
   async (req, res) => {
     try {
       const userId = req.user.id;
-      const { wasteLocation ,description,wasteCategory } = req.body;
+      const { wasteLocation, description ,landmark} = req.body;
 
       if (!wasteLocation || wasteLocation.trim().length < 3) {
         return res.status(400).json({ success: false, msg: "Waste location is required" });
       }
 
-      if (!req.file) {
+      // ✅ for array upload
+      if (!req.files || req.files.length === 0) {
         return res.status(400).json({ success: false, msg: "wasteImage is required" });
       }
 
-     
-      const fileName = await saveAsWebP(req.file.buffer, req.file.originalname);
+      // 1) Save ALL images and create URL array
+      const wasteImages = [];
+      for (const file of req.files) {
+        const fileName = await saveAsWebP(file.buffer, file.originalname);
+        const url = `${req.protocol}://${req.get("host")}/uploads/${fileName}`;
+        wasteImages.push(url);
+      }
 
-    
-      const wasteImage = `${req.protocol}://${req.get(
-        "host",
-      )}/uploads/${fileName}`; // recommended for frontend access
+      // 2) Clarifai inference (use first image buffer)
+      let aiMainCategory = "OTHERS";
+      let aiMainConfidence = null;
+      let aiDistribution = [];
 
+      try {
+        const PAT = process.env.CLARIFAI_PAT;
+        const USER_ID = process.env.CLARIFAI_USER_ID || "clarifai";
+        const APP_ID = process.env.CLARIFAI_APP_ID || "main";
+        const MODEL_ID = process.env.CLARIFAI_MODEL_ID || "general-image-recognition";
+
+        if (!PAT) throw new Error("CLARIFAI_PAT missing in .env");
+
+        const firstImage = req.files[0]; // ✅ first file
+        const base64 = firstImage.buffer.toString("base64");
+
+        const url = `https://api.clarifai.com/v2/users/${USER_ID}/apps/${APP_ID}/models/${MODEL_ID}/outputs`;
+
+        const clarifaiRes = await axios.post(
+          url,
+          { inputs: [{ data: { image: { base64 } } }] },
+          {
+            headers: {
+              Authorization: `Key ${PAT}`,
+              "Content-Type": "application/json",
+            },
+            timeout: 20000,
+          }
+        );
+
+        const concepts = clarifaiRes.data?.outputs?.[0]?.data?.concepts || [];
+
+        if (!concepts.length) {
+          return res.status(400).json({
+            success: false,
+            msg: "Could not recognize objects. Please upload a clearer waste photo.",
+          });
+        }
+
+        aiDistribution = concepts.slice(0, 10).map((c) => ({
+          label: c.name,
+          confidence: typeof c.value === "number" ? c.value : null,
+        }));
+
+        const result = analyzeWasteConcepts(concepts);
+
+        if (!result.isWaste) {
+          return res.status(400).json({
+            success: false,
+            msg: "This image does not look like waste. Please upload a clear waste photo.",
+          });
+        }
+
+        aiMainCategory = result.category;
+        aiMainConfidence = aiDistribution[0]?.confidence ?? null;
+
+        const allowed = ["ORGANIC", "PAPER", "PLASTIC", "OTHERS"];
+        if (!allowed.includes(aiMainCategory)) aiMainCategory = "OTHERS";
+      } catch (e) {
+        console.log("Clarifai classify failed:", e.response?.data || e.message);
+      }
+
+      // 3) Save to DB (wasteImage is ARRAY now)
       const reportWaste = await WasteReport.create({
         userId,
         wasteLocation: wasteLocation.trim(),
+        landmark,
         description,
-        wasteCategory,
-        wasteImage,
+        wasteCategory: aiMainCategory,
+
+        wasteImage: wasteImages, 
         status: "PENDING",
+        aiConfidence: aiMainConfidence,
+        aiDistribution,
       });
 
-      await StudentsModel.findByIdAndUpdate(userId,{
-        $inc:{rewardPoint : 100}
-      },
-      {new:true}
-    
-    )
+      // 4) Reward points
+      await StudentsModel.findByIdAndUpdate(
+        userId,
+        { $inc: { rewardPoint: 100 } },
+        { new: true }
+      );
 
       return res.status(201).json({
         success: true,
@@ -55,7 +147,10 @@ Router.post(
       });
     } catch (error) {
       console.log(error);
-      return res.status(500).json({ success: false, msg: error.message || "Internal Server Error" });
+      return res.status(500).json({
+        success: false,
+        msg: error.message || "Internal Server Error",
+      });
     }
   }
 );
