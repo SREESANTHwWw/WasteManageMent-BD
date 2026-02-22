@@ -123,7 +123,7 @@ Router.post(
         console.log("Clarifai classify failed:", e.response?.data || e.message);
       }
       const role = req.user.role;        // "student" or "staff"
-
+  console.log(role);
 const userModel = role === "staff" ? "Staff" : "Student";
 
       // 3) Save to DB (wasteImage is ARRAY now)
@@ -140,18 +140,22 @@ const userModel = role === "staff" ? "Staff" : "Student";
         aiConfidence: aiMainConfidence,
         aiDistribution,
       });
-
+    //  console.log(role);
+     
       // 4) Reward points
-      await StudentsModel.findByIdAndUpdate(
-        userId,
-        { $inc: { rewardPoint: 100 } },
-        { new: true }
-      );
-          await StaffModel.findByIdAndUpdate(
-        userId,
-        { $inc: { rewardPoint: 100 } },
-        { new: true }
-      );
+  if (role === "staff") {
+  await StaffModel.findByIdAndUpdate(
+    userId,
+    { $inc: { rewardPoint: 100 } },
+    { new: true }
+  );
+} else {
+  await StudentsModel.findByIdAndUpdate(
+    userId,
+    { $inc: { rewardPoint: 100 } },
+    { new: true }
+  );
+}
 
       return res.status(201).json({
         success: true,
@@ -219,9 +223,7 @@ Router.get(
   "/getAll/reports",
   authMiddleware,
   async (req, res) => {
-
     try {
-       
       const page = Math.max(parseInt(req.query.page || "1", 10), 1);
       const limit = Math.min(Math.max(parseInt(req.query.limit || "10", 10), 1), 50);
       const skip = (page - 1) * limit;
@@ -234,25 +236,54 @@ Router.get(
       if (status) filter.status = status;
       if (wasteCategory) filter.wasteCategory = wasteCategory;
 
-      // date range filter (createdAt)
+      // date range filter
       if (start || end) {
         filter.createdAt = {};
         if (start) filter.createdAt.$gte = new Date(start);
         if (end) filter.createdAt.$lte = new Date(end);
       }
 
-      const [reports, total] = await Promise.all([
-        WasteReport.find(filter)
-          .sort({ createdAt: -1 })
-          .skip(skip)
-          .limit(limit)
-          .lean().populate({
-            path:"userId",
-            select:"fullName"
+      // 🔥 1️⃣ Get paginated reports
+      const reportsPromise = WasteReport.find(filter)
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .populate({
+          path: "userId",
+          select: "fullName",
+        })
+        .lean();
 
-          }),
-        WasteReport.countDocuments(filter),
+      // 🔥 2️⃣ Get total count
+      const totalPromise = WasteReport.countDocuments(filter);
+
+      // 🔥 3️⃣ Get all status counts (WITHOUT pagination)
+      const statusCountPromise = WasteReport.aggregate([
+        { $match: filter },
+        {
+          $group: {
+            _id: "$status",
+            count: { $sum: 1 },
+          },
+        },
       ]);
+
+      const [reports, total, statusCounts] = await Promise.all([
+        reportsPromise,
+        totalPromise,
+        statusCountPromise,
+      ]);
+
+      // Convert array to object
+      const statusSummary = {
+        PENDING: 0,
+        IN_PROGRESS: 0,
+        RESOLVED: 0,
+      };
+
+      statusCounts.forEach((item) => {
+        statusSummary[item._id] = item.count;
+      });
 
       return res.status(200).json({
         success: true,
@@ -260,6 +291,7 @@ Router.get(
         limit,
         total,
         totalPages: Math.ceil(total / limit),
+        statusSummary, // 🔥 added here
         reports,
       });
     } catch (error) {

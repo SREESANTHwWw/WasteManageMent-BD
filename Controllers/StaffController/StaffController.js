@@ -2,6 +2,7 @@ const express = require("express");
 
 const jwt = require("jsonwebtoken");
 const StaffModel = require("../../models/StaffModel");
+const authMiddleware = require("../../Middleware/AuthMiddleware");
 const router = express.Router();
 
 router.post("/create/staff", async (req, res) => {
@@ -79,7 +80,11 @@ router.post("/login/staff", async (req, res) => {
 
     // create token
 const token = jwt.sign(
-  { id: staff._id, userModel: "Staff" },
+  {
+    id: staff._id,
+    role: staff.role,        
+    userModel: "Staff"
+  },
   process.env.JWT_SECRET,
   { expiresIn: "7d" }
 );
@@ -104,5 +109,22 @@ const token = jwt.sign(
     });
   }
 });
+
+router.patch("/staff/status", authMiddleware, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { status } = req.body;
+
+    if (!["ONLINE", "OFFLINE"].includes(status)) {
+      return res.status(400).json({ msg: "Only ONLINE/OFFLINE allowed here" });
+    }
+
+    const staff = await StaffModel.findByIdAndUpdate(userId, { status }, { new: true });
+    return res.status(200).json({ success: true, status: staff.status });
+  } catch (e) {
+    return res.status(500).json({ msg: "Server error" });
+  }
+});
+
 
 module.exports = router;
