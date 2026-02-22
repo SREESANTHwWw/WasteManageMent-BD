@@ -5,6 +5,7 @@ const roleMiddleware = require("../../Middleware/RoleBasedMiddlware");
 const WasteReport = require("../../models/WasteReport");
 const StudentsModel = require("../../models/StudentsModel");
 const axios = require("axios");
+const StaffModel = require("../../models/StaffModel");
 const Router = express.Router();
 
 
@@ -38,10 +39,13 @@ Router.post(
   async (req, res) => {
     try {
       const userId = req.user.id;
-      const { wasteLocation, description ,landmark} = req.body;
+      const { wasteLocation, description ,landmark,wasteQty} = req.body;
 
       if (!wasteLocation || wasteLocation.trim().length < 3) {
         return res.status(400).json({ success: false, msg: "Waste location is required" });
+      }
+      if(!wasteQty){
+        return res.status(400).json({success:false, msg:"Please Provide Waste qun"})
       }
 
       // ✅ for array upload
@@ -118,15 +122,19 @@ Router.post(
       } catch (e) {
         console.log("Clarifai classify failed:", e.response?.data || e.message);
       }
+      const role = req.user.role;        // "student" or "staff"
+
+const userModel = role === "staff" ? "Staff" : "Student";
 
       // 3) Save to DB (wasteImage is ARRAY now)
       const reportWaste = await WasteReport.create({
         userId,
+        userModel,
         wasteLocation: wasteLocation.trim(),
         landmark,
         description,
         wasteCategory: aiMainCategory,
-
+        wasteQty,
         wasteImage: wasteImages, 
         status: "PENDING",
         aiConfidence: aiMainConfidence,
@@ -135,6 +143,11 @@ Router.post(
 
       // 4) Reward points
       await StudentsModel.findByIdAndUpdate(
+        userId,
+        { $inc: { rewardPoint: 100 } },
+        { new: true }
+      );
+          await StaffModel.findByIdAndUpdate(
         userId,
         { $inc: { rewardPoint: 100 } },
         { new: true }
@@ -173,7 +186,12 @@ Router.get("/get/reports", authMiddleware, async (req, res) => {
         .sort({ createdAt: -1 })
         .skip(skip)
         .limit(limit)
-        .lean(),
+        .lean().populate({
+          path:"resolvedBy",
+          select:"staffID fullName "
+        }
+          
+        ),
       WasteReport.countDocuments(filter),
     ]);
 
@@ -190,6 +208,153 @@ Router.get("/get/reports", authMiddleware, async (req, res) => {
     return res.status(500).json({ success: false, msg: error.message || "Internal Server Error" });
   }
 });
+
+Router.get(
+  "/getAll/reports",
+  authMiddleware,
+  async (req, res) => {
+
+    try {
+       
+      const page = Math.max(parseInt(req.query.page || "1", 10), 1);
+      const limit = Math.min(Math.max(parseInt(req.query.limit || "10", 10), 1), 50);
+      const skip = (page - 1) * limit;
+
+      const { status, wasteCategory, start, end } = req.query;
+
+      const filter = {};
+
+      // optional filters
+      if (status) filter.status = status;
+      if (wasteCategory) filter.wasteCategory = wasteCategory;
+
+      // date range filter (createdAt)
+      if (start || end) {
+        filter.createdAt = {};
+        if (start) filter.createdAt.$gte = new Date(start);
+        if (end) filter.createdAt.$lte = new Date(end);
+      }
+
+      const [reports, total] = await Promise.all([
+        WasteReport.find(filter)
+          .sort({ createdAt: -1 })
+          .skip(skip)
+          .limit(limit)
+          .lean().populate({
+            path:"userId",
+            select:"fullName"
+
+          }),
+        WasteReport.countDocuments(filter),
+      ]);
+
+      return res.status(200).json({
+        success: true,
+        page,
+        limit,
+        total,
+        totalPages: Math.ceil(total / limit),
+        reports,
+      });
+    } catch (error) {
+      console.log(error);
+      return res.status(500).json({
+        success: false,
+        msg: error.message || "Internal Server Error",
+      });
+    }
+  }
+);
+
+
+Router.patch("/update/progress/status/id", authMiddleware, async(req,res)=>{
+      try {
+        const { id } = req.params;
+      const { status ,  } = req.body;
+         const allowed = ["PENDING", "IN_PROGRESS", "RESOLVED"];
+      if (!status || !allowed.includes(status)) {
+        return res.status(400).json({ success: false, msg: "Invalid status" });
+      }
+
+
+
+        
+      } catch (error) {
+        
+      }
+})
+
+Router.patch(
+  "/update/status/:id",
+  authMiddleware,
+  upload.array("verificationImages", 5), 
+  async (req, res) => {
+    try {
+      const { id } = req.params;
+      const { status } = req.body;
+
+      const allowed = ["PENDING", "IN_PROGRESS", "RESOLVED"];
+      if (!status || !allowed.includes(status)) {
+        return res.status(400).json({ success: false, msg: "Invalid status" });
+      }
+
+      // If resolved => proof image required
+      if (status === "RESOLVED") {
+        if (!req.files || req.files.length === 0) {
+          return res.status(400).json({
+            success: false,
+            msg: "Proof image is required when resolving a report",
+          });
+        }
+      }
+
+      // build proof image URLs (if uploaded)
+      let proofImages = [];
+      if (req.files && req.files.length > 0) {
+        for (const file of req.files) {
+          const fileName = await saveAsWebP(file.buffer, file.originalname);
+          const url = `${req.protocol}://${req.get("host")}/uploads/${fileName}`;
+          proofImages.push(url);
+        }
+      }
+
+      const updateData = { status };
+
+      // if proof images uploaded, store them
+      if (proofImages.length > 0) {
+        updateData.$push = { verificationImages : { $each: proofImages } };
+      }
+
+      // mark resolved metadata
+      if (status === "RESOLVED") {
+        updateData.resolvedAt = new Date();
+        updateData.resolvedBy = req.user.id; // staff/admin id
+      }
+
+      const updated = await WasteReport.findByIdAndUpdate(
+        id,
+        updateData,
+        { new: true }
+      );
+
+      if (!updated) {
+        return res.status(404).json({ success: false, msg: "Report not found" });
+      }
+
+      return res.status(200).json({
+        success: true,
+        msg: "Status updated successfully",
+        report: updated,
+      });
+    } catch (error) {
+      console.log(error);
+      return res.status(500).json({
+        success: false,
+        msg: error.message || "Internal Server Error",
+      });
+    }
+  }
+);
 
 
 module.exports = Router;

@@ -84,7 +84,7 @@ router.post("/login/staff", async (req, res) => {
         staffID: staff.staffID,
       },
       process.env.JWT_SECRET,
-      { expiresIn: "1d" }
+      { expiresIn: "7d" }
     );
 
     res.status(200).json({
@@ -95,7 +95,8 @@ router.post("/login/staff", async (req, res) => {
         id: staff._id,
         staffID: staff.staffID,
         fullName: staff.fullName,
-        role:staff.role
+        role:staff.role,
+         status:staff.status
       },
     });
   } catch (error) {

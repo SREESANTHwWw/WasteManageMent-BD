@@ -83,7 +83,7 @@ router.post("/login/student", async (req, res) => {
         admissionNumber: student.admissionNumber,
       },
       process.env.JWT_SECRET,
-      { expiresIn: "1d" }
+      { expiresIn: "7d" }
     );
 
     res.status(200).json({
@@ -95,6 +95,7 @@ router.post("/login/student", async (req, res) => {
         admissionNumber: student.admissionNumber,
         fullName: student.fullName,
         role:student.role
+       
       },
     });
   } catch (error) {
@@ -106,7 +107,7 @@ router.post("/login/student", async (req, res) => {
   }
 });
 
-
+  
 
 
 router.get("/get/me", authMiddleware, async (req, res) => {

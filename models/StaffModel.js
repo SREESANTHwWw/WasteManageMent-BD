@@ -8,26 +8,42 @@ const StaffSchema = new mongoose.Schema(
       trim: true,
       unique: true,
     },
-    dateOfBirth: {
-      type: String,
-      required: true,
-    },
+
     fullName: {
       type: String,
       required: true,
       trim: true,
     },
+
     email: {
       type: String,
       trim: true,
+      lowercase: true,
     },
+
+    dateOfBirth: {
+      type: Date,
+      required: true,
+    },
+
+    status: {
+      type: String,
+      enum: ["ONLINE", "IN_WORK", "OFFLINE"],
+      default: "OFFLINE",
+      required: true,
+    },
+
     role: {
       type: String,
       default: "staff",
     },
 
+    rewardPoint: {
+      type: Number,
+      default: 0,
+    },
   },
-  { timestamps: true },
+  { timestamps: true }
 );
 
 module.exports = mongoose.model("Staff", StaffSchema);
