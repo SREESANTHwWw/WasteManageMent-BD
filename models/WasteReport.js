@@ -62,6 +62,7 @@ const WasteReportSchema = new mongoose.Schema(
     resolvedBy: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Staff",
+      default: null,
     },
 
     resolvedAt: {

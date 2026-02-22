@@ -176,8 +176,8 @@ Router.get("/get/reports", authMiddleware, async (req, res) => {
     const limit = Math.min(Math.max(parseInt(req.query.limit || "10", 10), 1), 50);
     const skip = (page - 1) * limit;
 
-    // optional filters
     const filter = { userId };
+
     if (req.query.status) filter.status = req.query.status;
     if (req.query.wasteCategory) filter.wasteCategory = req.query.wasteCategory;
 
@@ -186,12 +186,14 @@ Router.get("/get/reports", authMiddleware, async (req, res) => {
         .sort({ createdAt: -1 })
         .skip(skip)
         .limit(limit)
-        .lean().populate({
-          path:"resolvedBy",
-          select:"staffID fullName "
-        }
-          
-        ),
+        .populate({
+          path: "resolvedBy",
+          select: "staffID fullName",
+        }).populate({
+          path: "userId",
+          select: "fullName email studentID staffID",
+        })
+        .lean(), 
       WasteReport.countDocuments(filter),
     ]);
 
@@ -203,9 +205,13 @@ Router.get("/get/reports", authMiddleware, async (req, res) => {
       totalPages: Math.ceil(total / limit),
       orders,
     });
+
   } catch (error) {
     console.log(error);
-    return res.status(500).json({ success: false, msg: error.message || "Internal Server Error" });
+    return res.status(500).json({
+      success: false,
+      msg: error.message || "Internal Server Error",
+    });
   }
 });
 

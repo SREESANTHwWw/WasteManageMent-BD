@@ -4,6 +4,8 @@ const jwt = require("jsonwebtoken");
 const authMiddleware = require("../../Middleware/AuthMiddleware");
 const router = express.Router();
 const mongoose = require("mongoose");
+const WasteReport = require("../../models/WasteReport");
+const StaffModel = require("../../models/StaffModel");
 router.post("/create/student", async (req, res) => {
   try {
     const { admissionNumber, dateOfBirth, fullName,email,role } = req.body;
@@ -77,14 +79,11 @@ router.post("/login/student", async (req, res) => {
     }
 
     // create token
-    const token = jwt.sign(
-      {
-        id: student._id,
-        admissionNumber: student.admissionNumber,
-      },
-      process.env.JWT_SECRET,
-      { expiresIn: "7d" }
-    );
+const token = jwt.sign(
+  { id: student._id, userModel: "Student" },
+  process.env.JWT_SECRET,
+  { expiresIn: "7d" }
+);
 
     res.status(200).json({
       success: true,
@@ -112,56 +111,25 @@ router.post("/login/student", async (req, res) => {
 
 router.get("/get/me", authMiddleware, async (req, res) => {
   try {
-    const userId = req.user.id;
+    const { id, userModel } = req.user;
+    const Model = userModel === "Staff" ? StaffModel : StudentsModel;
 
-    const user = await StudentsModel.aggregate([
-      {
-        $match: { _id: new mongoose.Types.ObjectId(userId) },
-      },
-      {
-        $lookup: {
-          from: "wastereports",
-          localField: "_id",
-          foreignField: "userId",
-          as: "wastereports",
-        },
-      },
-      {
-        $addFields: {
-          wastereports: {
-            $slice: [
-              {
-                $sortArray: {
-                  input: "$wastereports",
-                  sortBy: { createdAt: -1 },
-                },
-              },
-              4, 
-            ],
-          },
-        },
-      },
-      {
-        $project: {
-          dateOfBirth: 0,
-        },
-      },
-    ]);
+    const user = await Model.findById(id).select("-dateOfBirth").lean();
+    if (!user) return res.status(404).json({ success: false, msg: "User not found" });
 
-    if (!user.length) {
-      return res.status(404).json({ success: false, msg: "User not found" });
-    }
+    const wastereports = await WasteReport.find({ userId: id })
+      .sort({ createdAt: -1 })
+      .limit(4)
+      .populate({ path: "resolvedBy", select: "staffID fullName" })
+      .lean();
 
     return res.status(200).json({
       success: true,
-      user: user[0],
+      userModel,
+      user: { ...user, wastereports },
     });
-  } catch (error) {
-    console.log(error);
-    return res.status(500).json({
-      success: false,
-      msg: error.message || "Internal Server Error",
-    });
+  } catch (err) {
+    return res.status(500).json({ success: false, msg: err.message });
   }
 });
 
