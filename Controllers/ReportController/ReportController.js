@@ -771,9 +771,7 @@ Router.patch(
 // PATCH /approve/report/:id
 Router.patch("/approve/report/:id", authMiddleware, async (req, res) => {
   try {
-    if (req.user.role !== "admin") {
-      return res.status(403).json({ success: false, msg: "Admin access only" });
-    }
+  
 
     const report = await WasteReport.findById(req.params.id);
     if (!report) {
