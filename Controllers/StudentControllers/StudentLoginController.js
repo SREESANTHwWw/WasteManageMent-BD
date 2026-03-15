@@ -116,10 +116,31 @@ const token = jwt.sign(
 router.get("/get/me", authMiddleware, async (req, res) => {
   try {
     const { id, userModel } = req.user;
+
     const Model = userModel === "Staff" ? StaffModel : StudentsModel;
 
-    const user = await Model.findById(id).select("-dateOfBirth").lean();
+    
+    let user = await Model.findById(id).select("-dateOfBirth").lean();
     if (!user) return res.status(404).json({ success: false, msg: "User not found" });
+
+    
+    if (userModel === "Staff" && user.status === "ONLINE" || user.status === "IN_WORK") {
+     const TWELVE_HOURS = 12 * 60 * 60 * 1000;
+
+      const last = user.statusUpdatedAt ? new Date(user.statusUpdatedAt).getTime() : 0;
+      const now = Date.now();
+
+      if (last && now - last > TWELVE_HOURS) {
+        await StaffModel.updateOne(
+          { _id: id },
+          { $set: { status: "OFFLINE", statusUpdatedAt: new Date() } }
+        );
+
+        user = { ...user, status: "OFFLINE", statusUpdatedAt: new Date() };
+      }
+    }
+   
+   
 
     const wastereports = await WasteReport.find({ userId: id })
       .sort({ createdAt: -1 })
@@ -193,6 +214,74 @@ router.get("/leaderboard", async (req, res) => {
   }
 });
 
+/* ─── UPDATE STUDENT ────────────────────────────────────────────── */
+router.patch("/edit/:id", authMiddleware, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const updateData = req.body;
+
+    // Prevent manual updating of reward points through this route for security
+    delete updateData.rewardPoint;
+
+    const updatedStudent = await StudentsModel.findByIdAndUpdate(
+      id,
+      { $set: updateData },
+      { new: true, runValidators: true }
+    ).select("-dateOfBirth");
+
+    if (!updatedStudent) {
+      return res.status(404).json({
+        success: false,
+        msg: "Student not found",
+      });
+    }
+
+    res.status(200).json({
+      success: true,
+      msg: "Student updated successfully",
+      student: updatedStudent,
+    });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({
+      success: false,
+      msg: error.message || "Error updating student",
+    });
+  }
+});
+
+/* ─── DELETE STUDENT ────────────────────────────────────────────── */
+router.delete("/delete/:id", authMiddleware, async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    // Optional: Only allow certain roles to delete (e.g., Admins)
+    // if (req.user.role !== 'Admin') return res.status(403).json({ msg: "Unauthorized" });
+
+    const deletedStudent = await StudentsModel.findByIdAndDelete(id);
+
+    if (!deletedStudent) {
+      return res.status(404).json({
+        success: false,
+        msg: "Student not found",
+      });
+    }
+
+    // Clean up related data if necessary (e.g., WasteReports)
+    // await WasteReport.deleteMany({ userId: id });
+
+    res.status(200).json({
+      success: true,
+      msg: "Student record deleted successfully",
+    });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({
+      success: false,
+      msg: error.message || "Error deleting student",
+    });
+  }
+});
 
 
 module.exports = router;

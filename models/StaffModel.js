@@ -21,17 +21,36 @@ const StaffSchema = new mongoose.Schema(
       lowercase: true,
     },
 
+    // ── Added fields ──────────────────────────────────────────────
+    phone: {
+      type: String,
+      trim: true,
+      default: "",
+    },
+
+    department: {
+      type: String,
+      trim: true,
+      default: "",
+    },
+    // ─────────────────────────────────────────────────────────────
+
     dateOfBirth: {
       type: String,
       required: true,
     },
 
-    status: {
-      type: String,
-      enum: ["ONLINE", "IN_WORK", "OFFLINE"],
-      default: "OFFLINE",
-      required: true,
-    },
+    // status: {
+    //   type: String,
+    //   enum: ["ONLINE", "IN_WORK", "OFFLINE"],
+    //   default: "OFFLINE",
+    //   required: true,
+    // },
+
+    // statusUpdatedAt: {
+    //   type: Date,
+    //   default: Date.now,
+    // },
 
     role: {
       type: String,

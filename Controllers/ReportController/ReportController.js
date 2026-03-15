@@ -7,20 +7,41 @@ const StudentsModel = require("../../models/StudentsModel");
 const axios = require("axios");
 const StaffModel = require("../../models/StaffModel");
 const Router = express.Router();
-
-
-
-
-
+const mongoose = require("mongoose");
+const optionalAuth = require("../../Middleware/optionalAuth");
 
 function analyzeWasteConcepts(concepts = []) {
   const text = concepts.map((c) => (c.name || "").toLowerCase()).join(" | ");
 
-  const plasticKeys = ["plastic", "bottle", "bag", "wrapper", "cup", "polythene", "packet"];
-  const paperKeys = ["paper", "cardboard", "carton", "newspaper", "book", "magazine"];
+  const plasticKeys = [
+    "plastic",
+    "bottle",
+    "bag",
+    "wrapper",
+    "cup",
+    "polythene",
+    "packet",
+  ];
+  const paperKeys = [
+    "paper",
+    "cardboard",
+    "carton",
+    "newspaper",
+    "book",
+    "magazine",
+  ];
   const organicKeys = [
-    "food", "fruit", "banana", "vegetable", "peel", "organic", "leftover",
-    "garbage", "trash", "waste", "compost"
+    "food",
+    "fruit",
+    "banana",
+    "vegetable",
+    "peel",
+    "organic",
+    "leftover",
+    "garbage",
+    "trash",
+    "waste",
+    "compost",
   ];
 
   const hasAny = (arr) => arr.some((k) => text.includes(k));
@@ -34,26 +55,44 @@ function analyzeWasteConcepts(concepts = []) {
 
 Router.post(
   "/report/waste",
-  authMiddleware,
+  optionalAuth,
   upload.array("wasteImage", 5),
   async (req, res) => {
     try {
-      const userId = req.user.id;
-      const { wasteLocation, description ,landmark,wasteQty} = req.body;
+      const userId = req.user?.id || null;
+      const role = req.user?.role || "guest";
+      const isGuest = !req.user;
+
+      const {
+        wasteLocation,
+        description,
+        landmark,
+        wasteQty,
+        guestName,
+        guestPhone,
+      } = req.body;
 
       if (!wasteLocation || wasteLocation.trim().length < 3) {
-        return res.status(400).json({ success: false, msg: "Waste location is required" });
-      }
-      if(!wasteQty){
-        return res.status(400).json({success:false, msg:"Please Provide Waste qun"})
+        return res.status(400).json({
+          success: false,
+          msg: "Waste location is required",
+        });
       }
 
-      // ✅ for array upload
+      if (!wasteQty) {
+        return res.status(400).json({
+          success: false,
+          msg: "Please provide waste quantity",
+        });
+      }
+
       if (!req.files || req.files.length === 0) {
-        return res.status(400).json({ success: false, msg: "wasteImage is required" });
+        return res.status(400).json({
+          success: false,
+          msg: "wasteImage is required",
+        });
       }
 
-      // 1) Save ALL images and create URL array
       const wasteImages = [];
       for (const file of req.files) {
         const fileName = await saveAsWebP(file.buffer, file.originalname);
@@ -61,7 +100,6 @@ Router.post(
         wasteImages.push(url);
       }
 
-      // 2) Clarifai inference (use first image buffer)
       let aiMainCategory = "OTHERS";
       let aiMainConfidence = null;
       let aiDistribution = [];
@@ -70,11 +108,12 @@ Router.post(
         const PAT = process.env.CLARIFAI_PAT;
         const USER_ID = process.env.CLARIFAI_USER_ID || "clarifai";
         const APP_ID = process.env.CLARIFAI_APP_ID || "main";
-        const MODEL_ID = process.env.CLARIFAI_MODEL_ID || "general-image-recognition";
+        const MODEL_ID =
+          process.env.CLARIFAI_MODEL_ID || "general-image-recognition";
 
         if (!PAT) throw new Error("CLARIFAI_PAT missing in .env");
 
-        const firstImage = req.files[0]; // ✅ first file
+        const firstImage = req.files[0];
         const base64 = firstImage.buffer.toString("base64");
 
         const url = `https://api.clarifai.com/v2/users/${USER_ID}/apps/${APP_ID}/models/${MODEL_ID}/outputs`;
@@ -122,40 +161,46 @@ Router.post(
       } catch (e) {
         console.log("Clarifai classify failed:", e.response?.data || e.message);
       }
-      const role = req.user.role;        // "student" or "staff"
-  console.log(role);
-const userModel = role === "staff" ? "Staff" : "Student";
 
-      // 3) Save to DB (wasteImage is ARRAY now)
+      let userModel = null;
+      if (role === "staff") {
+        userModel = "Staff";
+      } else if (role === "student") {
+        userModel = "Student";
+      }
+
       const reportWaste = await WasteReport.create({
+        reporterType: isGuest ? "GUEST" : role,
         userId,
         userModel,
+        guestName: isGuest ? guestName || "" : "",
+        guestPhone: isGuest ? guestPhone || "" : "",
         wasteLocation: wasteLocation.trim(),
         landmark,
         description,
         wasteCategory: aiMainCategory,
         wasteQty,
-        wasteImage: wasteImages, 
+        wasteImage: wasteImages,
         status: "PENDING",
         aiConfidence: aiMainConfidence,
         aiDistribution,
       });
-    //  console.log(role);
-     
-      // 4) Reward points
-  if (role === "staff") {
-  await StaffModel.findByIdAndUpdate(
-    userId,
-    { $inc: { rewardPoint: 100 } },
-    { new: true }
-  );
-} else {
-  await StudentsModel.findByIdAndUpdate(
-    userId,
-    { $inc: { rewardPoint: 100 } },
-    { new: true }
-  );
-}
+
+      // if (!isGuest && userId) {
+      //   if (role === "staff") {
+      //     await StaffModel.findByIdAndUpdate(
+      //       userId,
+      //       { $inc: { rewardPoint: 100 } },
+      //       { new: true }
+      //     );
+      //   } else if (role === "student") {
+      //     await StudentsModel.findByIdAndUpdate(
+      //       userId,
+      //       { $inc: { rewardPoint: 100 } },
+      //       { new: true }
+      //     );
+      //   }
+      // }
 
       return res.status(201).json({
         success: true,
@@ -177,7 +222,10 @@ Router.get("/get/reports", authMiddleware, async (req, res) => {
     const userId = req.user.id;
 
     const page = Math.max(parseInt(req.query.page || "1", 10), 1);
-    const limit = Math.min(Math.max(parseInt(req.query.limit || "10", 10), 1), 50);
+    const limit = Math.min(
+      Math.max(parseInt(req.query.limit || "10", 10), 1),
+      50,
+    );
     const skip = (page - 1) * limit;
 
     const filter = { userId };
@@ -193,11 +241,13 @@ Router.get("/get/reports", authMiddleware, async (req, res) => {
         .populate({
           path: "resolvedBy",
           select: "staffID fullName",
-        }).populate({
+        })
+        .populate({
           path: "userId",
           select: "fullName email studentID staffID",
         })
-        .lean(), 
+
+        .lean(),
       WasteReport.countDocuments(filter),
     ]);
 
@@ -209,7 +259,6 @@ Router.get("/get/reports", authMiddleware, async (req, res) => {
       totalPages: Math.ceil(total / limit),
       orders,
     });
-
   } catch (error) {
     console.log(error);
     return res.status(500).json({
@@ -219,113 +268,240 @@ Router.get("/get/reports", authMiddleware, async (req, res) => {
   }
 });
 
-Router.get(
-  "/getAll/reports",
-  authMiddleware,
-  async (req, res) => {
-    try {
-      const page = Math.max(parseInt(req.query.page || "1", 10), 1);
-      const limit = Math.min(Math.max(parseInt(req.query.limit || "10", 10), 1), 50);
-      const skip = (page - 1) * limit;
+// Replace your existing GET /getAll/reports route with this
 
-      const { status, wasteCategory, start, end } = req.query;
+Router.get("/getAll/reports", authMiddleware, async (req, res) => {
+  try {
+    const page  = Math.max(parseInt(req.query.page  || "1",  10), 1);
+    const limit = Math.min(Math.max(parseInt(req.query.limit || "10", 10), 1), 50);
+    const skip  = (page - 1) * limit;
 
-      const filter = {};
+    const { status, wasteCategory, start, end } = req.query;
 
-      // optional filters
-      if (status) filter.status = status;
-      if (wasteCategory) filter.wasteCategory = wasteCategory;
+    const filter = {};
+    if (status)        filter.status        = status;
+    if (wasteCategory) filter.wasteCategory = wasteCategory;
+    if (start || end) {
+      filter.createdAt = {};
+      if (start) filter.createdAt.$gte = new Date(start);
+      if (end)   filter.createdAt.$lte = new Date(end);
+    }
 
-      // date range filter
-      if (start || end) {
-        filter.createdAt = {};
-        if (start) filter.createdAt.$gte = new Date(start);
-        if (end) filter.createdAt.$lte = new Date(end);
-      }
-
-      // 🔥 1️⃣ Get paginated reports
-      const reportsPromise = WasteReport.find(filter)
+    const [reports, total, statusCounts] = await Promise.all([
+      WasteReport.find(filter)
         .sort({ createdAt: -1 })
         .skip(skip)
         .limit(limit)
-        .populate({
-          path: "userId",
-          select: "fullName",
-        })
-        .lean();
+        .populate({ path: "userId",     select: "fullName email" })
+        .populate({ path: "assignedTo", select: "fullName staffId phone" }) // ← fixed
+        .lean(),
 
-      // 🔥 2️⃣ Get total count
-      const totalPromise = WasteReport.countDocuments(filter);
+      WasteReport.countDocuments(filter),
 
-      // 🔥 3️⃣ Get all status counts (WITHOUT pagination)
-      const statusCountPromise = WasteReport.aggregate([
+      WasteReport.aggregate([
         { $match: filter },
+        { $group: { _id: "$status", count: { $sum: 1 } } },
+      ]),
+    ]);
+
+    const statusSummary = { PENDING: 0, IN_PROGRESS: 0, RESOLVED: 0, REJECTED: 0 };
+    statusCounts.forEach((item) => {
+      if (statusSummary[item._id] !== undefined) statusSummary[item._id] = item.count;
+    });
+
+    return res.status(200).json({
+      success: true,
+      page,
+      limit,
+      total,
+      totalPages: Math.ceil(total / limit),
+      statusSummary,
+      reports,
+    });
+  } catch (error) {
+    console.log(error);
+    return res.status(500).json({ success: false, msg: error.message || "Internal Server Error" });
+  }
+});
+Router.get("/getAll/reports/pending", authMiddleware, async (req, res) => {
+  try {
+    const page = Math.max(parseInt(req.query.page || "1", 10), 1);
+    const limit = Math.min(
+      Math.max(parseInt(req.query.limit || "10", 10), 1),
+      50,
+    );
+    const skip = (page - 1) * limit;
+
+    const { status, wasteCategory, start, end } = req.query;
+
+    const filter = { status: status || "PENDING" };
+
+    if (wasteCategory) filter.wasteCategory = wasteCategory;
+
+    // date range filter
+    if (start || end) {
+      filter.createdAt = {};
+      if (start) filter.createdAt.$gte = new Date(start);
+      if (end) filter.createdAt.$lte = new Date(end);
+    }
+
+    // 🔥 1️⃣ Get paginated reports
+    const reportsPromise = WasteReport.find(filter)
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limit)
+      .populate({
+        path: "userId",
+        select: "fullName",
+      })
+      .populate({
+        path: "assignedStaff",
+        populate: [
+          { path: "staff", select: "fullName staffID" },
+          { path: "team", select: "fullName staffID" },
+        ],
+      })
+      .lean();
+
+    // 🔥 2️⃣ Get total count
+    const totalPromise = WasteReport.countDocuments(filter);
+
+    // 🔥 3️⃣ Get all status counts (WITHOUT pagination)
+    const statusCountPromise = WasteReport.aggregate([
+      { $match: filter },
+      {
+        $group: {
+          _id: "$status",
+          count: { $sum: 1 },
+        },
+      },
+    ]);
+
+    const [reports, total, statusCounts] = await Promise.all([
+      reportsPromise,
+      totalPromise,
+      statusCountPromise,
+    ]);
+
+    // Convert array to object
+    const statusSummary = {
+      PENDING: 0,
+      IN_PROGRESS: 0,
+      RESOLVED: 0,
+    };
+
+    statusCounts.forEach((item) => {
+      statusSummary[item._id] = item.count;
+    });
+
+    return res.status(200).json({
+      success: true,
+      page,
+      limit,
+      total,
+      totalPages: Math.ceil(total / limit),
+      statusSummary, // 🔥 added here
+      reports,
+    });
+  } catch (error) {
+    console.log(error);
+    return res.status(500).json({
+      success: false,
+      msg: error.message || "Internal Server Error",
+    });
+  }
+});
+
+Router.patch("/take/task/:id", authMiddleware, async (req, res) => {
+  const session = await mongoose.startSession();
+
+  try {
+    if (req.user.role !== "staff") {
+      return res
+        .status(403)
+        .json({ success: false, msg: "Only staff can take tasks" });
+    }
+
+    const { id } = req.params;
+    let { team = [] } = req.body;
+
+    // ✅ sanitize team: remove duplicates + remove self
+    team = [...new Set(team.map(String))].filter(
+      (x) => x !== String(req.user.id),
+    );
+
+    await session.withTransaction(async () => {
+      // 1) Main staff must be ONLINE -> set to IN_WORK
+      const staff = await StaffModel.findOneAndUpdate(
+        { _id: req.user.id, status: "ONLINE" },
+        { $set: { status: "IN_WORK", statusUpdatedAt: new Date() } },
+        { new: true, session },
+      );
+
+      if (!staff) {
+        throw new Error("You must be ONLINE to take a task.");
+      }
+
+      // 2) Team staff: only update those who are ONLINE
+      // (If you want to REQUIRE all team to be ONLINE, see below)
+      if (team.length > 0) {
+        await StaffModel.updateMany(
+          { _id: { $in: team }, status: "ONLINE" },
+          { $set: { status: "IN_WORK", statusUpdatedAt: new Date() } },
+          { session },
+        );
+      }
+
+      // 3) Update report
+      const report = await WasteReport.findOneAndUpdate(
+        { _id: id, "assignedStaff.staff": { $ne: req.user.id } },
         {
-          $group: {
-            _id: "$status",
-            count: { $sum: 1 },
+          $set: { status: "IN_PROGRESS" },
+          $push: {
+            assignedStaff: {
+              staff: req.user.id,
+              team,
+              joinedAt: new Date(),
+              startedAt: new Date(),
+            },
           },
         },
-      ]);
+        { new: true, session },
+      );
 
-      const [reports, total, statusCounts] = await Promise.all([
-        reportsPromise,
-        totalPromise,
-        statusCountPromise,
-      ]);
+      if (!report) {
+        // revert main staff
+        await StaffModel.findByIdAndUpdate(
+          req.user.id,
+          { $set: { status: "ONLINE", statusUpdatedAt: new Date() } },
+          { session },
+        );
 
-      // Convert array to object
-      const statusSummary = {
-        PENDING: 0,
-        IN_PROGRESS: 0,
-        RESOLVED: 0,
-      };
+        // revert team too (best effort)
+        if (team.length > 0) {
+          await StaffModel.updateMany(
+            { _id: { $in: team } },
+            { $set: { status: "ONLINE", statusUpdatedAt: new Date() } },
+            { session },
+          );
+        }
 
-      statusCounts.forEach((item) => {
-        statusSummary[item._id] = item.count;
-      });
+        throw new Error("Report not found OR you already took this task.");
+      }
 
-      return res.status(200).json({
-        success: true,
-        page,
-        limit,
-        total,
-        totalPages: Math.ceil(total / limit),
-        statusSummary, // 🔥 added here
-        reports,
-      });
-    } catch (error) {
-      console.log(error);
-      return res.status(500).json({
-        success: false,
-        msg: error.message || "Internal Server Error",
-      });
-    }
+      res.status(200).json({ success: true, msg: "Task taken", report });
+    });
+  } catch (error) {
+    return res.status(400).json({ success: false, msg: error.message });
+  } finally {
+    session.endSession();
   }
-);
-
-
-Router.patch("/update/progress/status/id", authMiddleware, async(req,res)=>{
-      try {
-        const { id } = req.params;
-      const { status ,  } = req.body;
-         const allowed = ["PENDING", "IN_PROGRESS", "RESOLVED"];
-      if (!status || !allowed.includes(status)) {
-        return res.status(400).json({ success: false, msg: "Invalid status" });
-      }
-
-
-
-        
-      } catch (error) {
-        
-      }
-})
+});
 
 Router.patch(
   "/update/status/:id",
   authMiddleware,
-  upload.array("verificationImages", 5), 
+  upload.array("verificationImages", 5),
   async (req, res) => {
     try {
       const { id } = req.params;
@@ -336,19 +512,21 @@ Router.patch(
         return res.status(400).json({ success: false, msg: "Invalid status" });
       }
 
-      // If resolved => proof image required
-      if (status === "RESOLVED") {
-        if (!req.files || req.files.length === 0) {
-          return res.status(400).json({
-            success: false,
-            msg: "Proof image is required when resolving a report",
-          });
-        }
+      if (req.user.role !== "staff" && req.user.role !== "admin") {
+        return res
+          .status(403)
+          .json({ success: false, msg: "Only staff/admin can update status" });
       }
 
-      // build proof image URLs (if uploaded)
+      if (status === "RESOLVED" && (!req.files || req.files.length === 0)) {
+        return res.status(400).json({
+          success: false,
+          msg: "Proof image is required when resolving a report",
+        });
+      }
+
       let proofImages = [];
-      if (req.files && req.files.length > 0) {
+      if (req.files?.length) {
         for (const file of req.files) {
           const fileName = await saveAsWebP(file.buffer, file.originalname);
           const url = `${req.protocol}://${req.get("host")}/uploads/${fileName}`;
@@ -356,27 +534,42 @@ Router.patch(
         }
       }
 
-      const updateData = { status };
+      const updateData = { $set: { status } };
 
-      // if proof images uploaded, store them
       if (proofImages.length > 0) {
-        updateData.$push = { verificationImages : { $each: proofImages } };
+        updateData.$push = { verificationImages: { $each: proofImages } };
       }
 
-      // mark resolved metadata
       if (status === "RESOLVED") {
-        updateData.resolvedAt = new Date();
-        updateData.resolvedBy = req.user.id; // staff/admin id
+        updateData.$set.resolvedAt = new Date();
+        updateData.$addToSet = { resolvedBy: req.user.id };
       }
 
-      const updated = await WasteReport.findByIdAndUpdate(
-        id,
-        updateData,
-        { new: true }
-      );
+      const updated = await WasteReport.findByIdAndUpdate(id, updateData, {
+        new: true,
+      }).lean();
 
       if (!updated) {
-        return res.status(404).json({ success: false, msg: "Report not found" });
+        return res
+          .status(404)
+          .json({ success: false, msg: "Report not found" });
+      }
+
+      // ✅ Update staff status (main + team) when resolved
+      if (status === "RESOLVED") {
+        // pick the assignment for this staff if exists, else last assignment
+        const myAssign =
+          updated.assignedStaff?.find(
+            (a) => String(a.staff) === String(req.user.id),
+          ) || updated.assignedStaff?.[updated.assignedStaff.length - 1];
+
+        const teamIds = myAssign?.team || [];
+        const staffIdsToOnline = [req.user.id, ...teamIds];
+
+        await StaffModel.updateMany(
+          { _id: { $in: staffIdsToOnline } },
+          { $set: { status: "ONLINE", statusUpdatedAt: new Date() } },
+        );
       }
 
       return res.status(200).json({
@@ -391,8 +584,349 @@ Router.patch(
         msg: error.message || "Internal Server Error",
       });
     }
+  },
+);
+
+// ── Step 1: Start Self-Clean (Staff + Student) ───────────────────────────────
+// PATCH /self-clean/start/:id
+// User clicks "Self Cleaning" → sets status to IN_PROGRESS, records who is cleaning
+Router.patch("/self-clean/start/:id", authMiddleware, async (req, res) => {
+  try {
+    const { role, id: userId } = req.user;
+
+    if (!["staff", "student"].includes(role)) {
+      return res.status(403).json({
+        success: false,
+        msg: "Only staff and students can self-clean reports",
+      });
+    }
+
+    const report = await WasteReport.findById(req.params.id);
+
+    if (!report) {
+      return res.status(404).json({ success: false, msg: "Report not found" });
+    }
+
+    if (report.status === "RESOLVED") {
+      return res.status(400).json({ success: false, msg: "Report is already resolved" });
+    }
+
+    if (report.status === "REJECTED") {
+      return res.status(400).json({ success: false, msg: "Cannot clean a rejected report" });
+    }
+
+    if (report.status === "IN_PROGRESS" && report.selfCleanedBy) {
+      return res.status(400).json({
+        success: false,
+        msg: "Someone is already cleaning this report",
+      });
+    }
+
+    const updated = await WasteReport.findByIdAndUpdate(
+      req.params.id,
+      {
+        $set: {
+          status: "IN_PROGRESS",
+          selfCleanedBy: userId,
+          selfCleanedByModel: role === "staff" ? "Staff" : "Student",
+          selfCleanStartedAt: new Date(),
+        },
+      },
+      { new: true }
+    )
+      .populate("userId", "fullName email")
+      .lean();
+
+    return res.status(200).json({
+      success: true,
+      msg: "Self-cleaning started! Upload proof when done.",
+      report: updated,
+    });
+  } catch (error) {
+    console.error(error);
+    return res.status(500).json({
+      success: false,
+      msg: error.message || "Internal Server Error",
+    });
+  }
+});
+
+// ── Step 2: Complete Self-Clean with proof ────────────────────────────────────
+// PATCH /self-clean/complete/:id
+// User uploads proof → status → RESOLVED + +100 reward points
+Router.patch(
+  "/self-clean/complete/:id",
+  authMiddleware,
+  upload.array("verificationImages", 4),
+  async (req, res) => {
+    try {
+      const { role, id: userId } = req.user;
+
+      if (!["staff", "student"].includes(role)) {
+        return res.status(403).json({
+          success: false,
+          msg: "Only staff and students can submit cleaning proof",
+        });
+      }
+
+      if (!req.files || req.files.length === 0) {
+        return res.status(400).json({
+          success: false,
+          msg: "At least one proof image is required",
+        });
+      }
+
+      const report = await WasteReport.findById(req.params.id);
+
+      if (!report) {
+        return res.status(404).json({ success: false, msg: "Report not found" });
+      }
+
+      if (report.status === "RESOLVED") {
+        return res.status(400).json({ success: false, msg: "Report is already resolved" });
+      }
+
+      if(report.status === "REJECTED"){
+          return res.status(400).json({
+          success: false,
+          msg: "Rejected this waste report",
+        });
+      }
+
+      if (report.status !== "IN_PROGRESS") {
+        return res.status(400).json({
+          success: false,
+          msg: "Start self-cleaning first before submitting proof",
+        });
+      }
+
+      // Verify the same user who started is completing
+      if (report.selfCleanedBy?.toString() !== userId.toString()) {
+        return res.status(403).json({
+          success: false,
+          msg: "Only the user who started cleaning can complete this",
+        });
+      }
+
+      // Upload proof images
+      const proofImages = [];
+      for (const file of req.files) {
+        const fileName = await saveAsWebP(file.buffer, file.originalname);
+        const url = `${req.protocol}://${req.get("host")}/uploads/${fileName}`;
+        proofImages.push(url);
+      }
+
+      // Mark as RESOLVED
+      const updated = await WasteReport.findByIdAndUpdate(
+        req.params.id,
+        {
+          $set: {
+            status: "RESOLVED",
+            resolvedAt: new Date(),
+          },
+          $push: { verificationImages: { $each: proofImages } },
+          $addToSet: { resolvedBy: userId },
+        },
+        { new: true }
+      )
+        .populate("userId", "fullName email")
+        .lean();
+
+      // Award +100 reward points
+      if (role === "staff") {
+        await StaffModel.findByIdAndUpdate(
+          userId,
+          { $inc: { rewardPoint: 100 } }
+        );
+      } else if (role === "student") {
+        await StudentsModel.findByIdAndUpdate(
+          userId,
+          { $inc: { rewardPoint: 100 } }
+        );
+      }
+
+      return res.status(200).json({
+        success: true,
+        msg: "Cleaning verified! You earned +100 reward points 🌿",
+        rewardEarned: 100,
+        report: updated,
+      });
+    } catch (error) {
+      console.error(error);
+      return res.status(500).json({
+        success: false,
+        msg: error.message || "Internal Server Error",
+      });
+    }
   }
 );
 
+
+
+
+// ─── ADD THESE ROUTES TO YOUR EXISTING wasteReportRouter.js ─────────────────
+// All routes below require admin role
+
+// ── Approve Report (PENDING → IN_PROGRESS, or IN_PROGRESS → RESOLVED) ────────
+// PATCH /approve/report/:id
+Router.patch("/approve/report/:id", authMiddleware, async (req, res) => {
+  try {
+    if (req.user.role !== "admin") {
+      return res.status(403).json({ success: false, msg: "Admin access only" });
+    }
+
+    const report = await WasteReport.findById(req.params.id);
+    if (!report) {
+      return res.status(404).json({ success: false, msg: "Report not found" });
+    }
+
+    if (report.status === "RESOLVED") {
+      return res.status(400).json({ success: false, msg: "Report already resolved" });
+    }
+    if (report.status === "REJECTED") {
+      return res.status(400).json({ success: false, msg: "Cannot approve a rejected report" });
+    }
+
+    const nextStatus = report.status === "PENDING" ? "IN_PROGRESS" : "RESOLVED";
+
+    const updated = await WasteReport.findByIdAndUpdate(
+      req.params.id,
+      {
+        $set: {
+          status: nextStatus,
+          ...(nextStatus === "RESOLVED" ? { resolvedAt: new Date() } : {}),
+        },
+      },
+      { new: true }
+    )
+      .populate("userId", "fullName email")
+      .populate("assignedTo", "fullName staffId phone")
+      .lean();
+
+    return res.status(200).json({
+      success: true,
+      msg: `Report ${nextStatus === "IN_PROGRESS" ? "approved — now In Progress" : "marked as Resolved"}`,
+      report: updated,
+    });
+  } catch (error) {
+    return res.status(500).json({ success: false, msg: error.message });
+  }
+});
+
+// ── Reject Report ─────────────────────────────────────────────────────────────
+// PATCH /reject/report/:id
+Router.patch("/reject/report/:id", authMiddleware, async (req, res) => {
+  try {
+    if (req.user.role !== "admin") {
+      return res.status(403).json({ success: false, msg: "Admin access only" });
+    }
+
+    const { rejectionReason } = req.body;
+
+    const report = await WasteReport.findById(req.params.id);
+    if (!report) {
+      return res.status(404).json({ success: false, msg: "Report not found" });
+    }
+
+    if (report.status === "RESOLVED") {
+      return res.status(400).json({ success: false, msg: "Cannot reject a resolved report" });
+    }
+    if (report.status === "REJECTED") {
+      return res.status(400).json({ success: false, msg: "Report is already rejected" });
+    }
+
+    const updated = await WasteReport.findByIdAndUpdate(
+      req.params.id,
+      { $set: { status: "REJECTED", rejectionReason: rejectionReason || "" } },
+      { new: true }
+    )
+      .populate("userId", "fullName email")
+      .lean();
+
+    return res.status(200).json({
+      success: true,
+      msg: "Report rejected successfully",
+      report: updated,
+    });
+  } catch (error) {
+    return res.status(500).json({ success: false, msg: error.message });
+  }
+});
+
+// ── Assign Cleaning Staff ─────────────────────────────────────────────────────
+// PATCH /assign/report/:id
+Router.patch("/assign/report/:id", authMiddleware, async (req, res) => {
+  try {
+   
+
+    const { assignedTo, staffModel } = req.body;
+    // staffModel: "CleaningStaff" | "Staff"
+
+    if (!assignedTo) {
+      return res.status(400).json({ success: false, msg: "assignedTo is required" });
+    }
+
+    const report = await WasteReport.findById(req.params.id);
+    if (!report) {
+      return res.status(404).json({ success: false, msg: "Report not found" });
+    }
+
+    if (report.status === "RESOLVED" || report.status === "REJECTED") {
+      return res.status(400).json({
+        success: false,
+        msg: "Cannot assign staff to a resolved or rejected report",
+      });
+    }
+
+    const updated = await WasteReport.findByIdAndUpdate(
+      req.params.id,
+      {
+        $set: {
+          assignedTo,
+          assignedStaffModel: staffModel || "CleaningStaff",
+          assignedAt: new Date(),
+          // Auto-move to IN_PROGRESS when assigned if still PENDING
+          ...(report.status === "PENDING" ? { status: "IN_PROGRESS" } : {}),
+        },
+      },
+      { new: true }
+    )
+      .populate("userId", "fullName email")
+      .populate("assignedTo", "fullName staffId phone")
+      .lean();
+
+    return res.status(200).json({
+      success: true,
+      msg: "Staff assigned successfully",
+      report: updated,
+    });
+  } catch (error) {
+    return res.status(500).json({ success: false, msg: error.message });
+  }
+});
+
+// ── Delete Report (Admin only) ────────────────────────────────────────────────
+// DELETE /delete/report/:id
+Router.delete("/delete/report/:id", authMiddleware, async (req, res) => {
+  try {
+    if (req.user.role !== "admin") {
+      return res.status(403).json({ success: false, msg: "Admin access only" });
+    }
+
+    const report = await WasteReport.findByIdAndDelete(req.params.id);
+
+    if (!report) {
+      return res.status(404).json({ success: false, msg: "Report not found" });
+    }
+
+    return res.status(200).json({
+      success: true,
+      msg: "Report deleted successfully",
+      deletedId: req.params.id,
+    });
+  } catch (error) {
+    return res.status(500).json({ success: false, msg: error.message });
+  }
+});
 
 module.exports = Router;
