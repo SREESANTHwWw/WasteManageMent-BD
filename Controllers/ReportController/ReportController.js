@@ -615,6 +615,14 @@ Router.patch("/self-clean/start/:id", authMiddleware, async (req, res) => {
       return res.status(400).json({ success: false, msg: "Cannot clean a rejected report" });
     }
 
+    // ── Block self-clean if admin already assigned a cleaning staff ──
+    if (report.assignedTo) {
+      return res.status(400).json({
+        success: false,
+        msg: "This report has been assigned to a cleaning staff by admin. Self-cleaning is not allowed.",
+      });
+    }
+
     if (report.status === "IN_PROGRESS" && report.selfCleanedBy) {
       return res.status(400).json({
         success: false,
@@ -815,9 +823,7 @@ Router.patch("/approve/report/:id", authMiddleware, async (req, res) => {
 // PATCH /reject/report/:id
 Router.patch("/reject/report/:id", authMiddleware, async (req, res) => {
   try {
-    if (req.user.role !== "admin") {
-      return res.status(403).json({ success: false, msg: "Admin access only" });
-    }
+ 
 
     const { rejectionReason } = req.body;
 
