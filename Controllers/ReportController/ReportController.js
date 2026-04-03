@@ -100,9 +100,12 @@ Router.post(
         wasteImages.push(url);
       }
 
-      let aiMainCategory = "OTHERS";
+      // ✅ AI must succeed — default is blocked
+      let aiMainCategory = null;
       let aiMainConfidence = null;
       let aiDistribution = [];
+      let aiPassed = false;
+      let aiBlockReason = "AI verification failed. Please try again later.";
 
       try {
         const PAT = process.env.CLARIFAI_PAT;
@@ -116,27 +119,42 @@ Router.post(
         const firstImage = req.files[0];
         const base64 = firstImage.buffer.toString("base64");
 
-        const url = `https://api.clarifai.com/v2/users/${USER_ID}/apps/${APP_ID}/models/${MODEL_ID}/outputs`;
+        const clarifaiUrl = `https://api.clarifai.com/v2/users/${USER_ID}/apps/${APP_ID}/models/${MODEL_ID}/outputs`;
 
-        const clarifaiRes = await axios.post(
-          url,
-          { inputs: [{ data: { image: { base64 } } }] },
-          {
-            headers: {
-              Authorization: `Key ${PAT}`,
-              "Content-Type": "application/json",
-            },
-            timeout: 20000,
-          }
-        );
+        // Nested try/catch so axios 4xx/5xx doesn't escape to outer catch
+        let clarifaiRes;
+        try {
+          clarifaiRes = await axios.post(
+            clarifaiUrl,
+            { inputs: [{ data: { image: { base64 } } }] },
+            {
+              headers: {
+                Authorization: `Key ${PAT}`,
+                "Content-Type": "application/json",
+              },
+              timeout: 20000,
+            }
+          );
+        } catch (axiosErr) {
+          console.log("Clarifai HTTP error:", axiosErr.message);
+          aiBlockReason = "AI service is unavailable. Please try again later.";
+          throw new Error("AI_FAILED");
+        }
+
+        // API-level error in response body (e.g. 402 insufficient credits)
+        const statusCode = clarifaiRes.data?.status?.code;
+        if (statusCode && statusCode !== 10000) {
+          console.log("Clarifai API error:", clarifaiRes.data?.status?.description);
+          aiBlockReason = "AI service is unavailable. Please try again later.";
+          throw new Error("AI_FAILED");
+        }
 
         const concepts = clarifaiRes.data?.outputs?.[0]?.data?.concepts || [];
 
         if (!concepts.length) {
-          return res.status(400).json({
-            success: false,
-            msg: "Could not recognize objects. Please upload a clearer waste photo.",
-          });
+          console.log("No concepts returned from Clarifai.");
+          aiBlockReason = "Could not analyze the image. Please upload a clearer photo.";
+          throw new Error("AI_FAILED");
         }
 
         aiDistribution = concepts.slice(0, 10).map((c) => ({
@@ -146,22 +164,31 @@ Router.post(
 
         const result = analyzeWasteConcepts(concepts);
 
+        // AI succeeded but image is not waste
         if (!result.isWaste) {
-          return res.status(400).json({
-            success: false,
-            msg: "This image does not look like waste. Please upload a clear waste photo.",
-          });
+          aiBlockReason = "This image does not look like waste. Please upload a clear waste photo.";
+          throw new Error("NOT_WASTE");
         }
 
+        // ✅ All checks passed
         aiMainCategory = result.category;
         aiMainConfidence = aiDistribution[0]?.confidence ?? null;
 
         const allowed = ["ORGANIC", "PAPER", "PLASTIC", "OTHERS"];
         if (!allowed.includes(aiMainCategory)) aiMainCategory = "OTHERS";
+
+        aiPassed = true;
+
       } catch (e) {
-        console.log("Clarifai classify failed:", e.response?.data || e.message);
+        console.log("AI verification blocked report:", e.message);
+        // Any failure — block the report with the appropriate reason
+        return res.status(400).json({
+          success: false,
+          msg: aiBlockReason,
+        });
       }
 
+      // Only reaches here if aiPassed === true
       let userModel = null;
       if (role === "staff") {
         userModel = "Staff";
@@ -185,22 +212,6 @@ Router.post(
         aiConfidence: aiMainConfidence,
         aiDistribution,
       });
-
-      // if (!isGuest && userId) {
-      //   if (role === "staff") {
-      //     await StaffModel.findByIdAndUpdate(
-      //       userId,
-      //       { $inc: { rewardPoint: 100 } },
-      //       { new: true }
-      //     );
-      //   } else if (role === "student") {
-      //     await StudentsModel.findByIdAndUpdate(
-      //       userId,
-      //       { $inc: { rewardPoint: 100 } },
-      //       { new: true }
-      //     );
-      //   }
-      // }
 
       return res.status(201).json({
         success: true,
@@ -913,9 +924,7 @@ Router.patch("/assign/report/:id", authMiddleware, async (req, res) => {
 // DELETE /delete/report/:id
 Router.delete("/delete/report/:id", authMiddleware, async (req, res) => {
   try {
-    if (req.user.role !== "admin") {
-      return res.status(403).json({ success: false, msg: "Admin access only" });
-    }
+  
 
     const report = await WasteReport.findByIdAndDelete(req.params.id);
 
