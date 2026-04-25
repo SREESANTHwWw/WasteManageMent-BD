@@ -627,7 +627,7 @@ Router.patch("/self-clean/start/:id", authMiddleware, async (req, res) => {
     }
 
     // ── Block self-clean if admin already assigned a cleaning staff ──
-    if (report.assignedTo) {
+    if (report.assignedTo.length > 0) {
       return res.status(400).json({
         success: false,
         msg: "This report has been assigned to a cleaning staff by admin. Self-cleaning is not allowed.",
@@ -872,14 +872,12 @@ Router.patch("/reject/report/:id", authMiddleware, async (req, res) => {
 // PATCH /assign/report/:id
 Router.patch("/assign/report/:id", authMiddleware, async (req, res) => {
   try {
-   
-
+    // assignedTo is now an ARRAY of staff IDs
     const { assignedTo, staffModel } = req.body;
-    // staffModel: "CleaningStaff" | "Staff"
 
-    if (!assignedTo) {
-      return res.status(400).json({ success: false, msg: "assignedTo is required" });
-    }
+    // if (!assignedTo || !Array.isArray(assignedTo) || assignedTo.length === 0) {
+    //   return res.status(400).json({ success: false, msg: "assignedTo must be a non-empty array of staff IDs" });
+    // }
 
     const report = await WasteReport.findById(req.params.id);
     if (!report) {
@@ -897,17 +895,16 @@ Router.patch("/assign/report/:id", authMiddleware, async (req, res) => {
       req.params.id,
       {
         $set: {
-          assignedTo,
+          assignedTo,                              // array of IDs
           assignedStaffModel: staffModel || "CleaningStaff",
           assignedAt: new Date(),
-          // Auto-move to IN_PROGRESS when assigned if still PENDING
           ...(report.status === "PENDING" ? { status: "IN_PROGRESS" } : {}),
         },
       },
       { new: true }
     )
       .populate("userId", "fullName email")
-      .populate("assignedTo", "fullName staffId phone")
+      .populate("assignedTo", "fullName staffId phone")   // populates all
       .lean();
 
     return res.status(200).json({

@@ -8,6 +8,8 @@ const Staff = require("./Controllers/StaffController/StaffController")
 const ReportWaster = require("./Controllers/ReportController/ReportController")
 const certificateRoute = require("./Controllers/certificateController/certificateController");
 const admin = require("./Controllers/AdminController/AdminController")
+const otpRoute = require("./Controllers/Otproutes")
+const forgotDob = require("./Controllers/Forgotdobroutes")
 const Campaign = require("./Controllers/campaignController/CampaignController")
 const CleaningStaff = require("./Controllers/CleaningStaffController/CleaningStaffController")
 const path = require("path");
@@ -18,6 +20,8 @@ app.get("/check", (req, res) => {
   res.send("Hi, I’m running now 🚀");
 });
 app.use("/uploads", express.static(path.join(__dirname, "uploads")));
+app.use("/api/v1/" ,otpRoute )
+app.use("/api/v1/" ,forgotDob )
 app.use("/api/v1/" ,StudentLogin)
 app.use("/api/v1/",Staff)
 app.use("/api/v1/", admin)

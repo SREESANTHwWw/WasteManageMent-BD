@@ -36,24 +36,40 @@ router.post("/create/staff", async (req, res) => {
 // ── Staff Login ───────────────────────────────────────────────────
 router.post("/login/staff", async (req, res) => {
   try {
-    const { staffID, dateOfBirth } = req.body;
+    const { staffID, email, dateOfBirth } = req.body;
 
-    if (!staffID || !dateOfBirth) {
-      return res.status(400).json({ success: false, msg: "Staff ID and date of birth are required" });
+    // At least one identifier (staffID or email) must be provided
+    if ((!staffID && !email) || !dateOfBirth) {
+      return res.status(400).json({
+        success: false,
+        msg: "Staff ID or Email, and date of birth are required",
+      });
     }
 
-    const staff = await StaffModel.findOne({ staffID });
+    // Build query: find by staffID if provided, otherwise by email
+    let query = {};
+    if (staffID) {
+      query.staffID = staffID;
+    } else if (email) {
+      query.email = email;
+    }
+
+    const staff = await StaffModel.findOne(query);
 
     if (!staff) {
-      return res.status(404).json({ success: false, msg: "Staff not found" });
+      return res.status(404).json({
+        success: false,
+        msg: staffID ? "Staff not found with this Staff ID" : "Staff not found with this Email",
+      });
     }
 
+    // Validate date of birth
     if (staff.dateOfBirth !== dateOfBirth) {
-      return res.status(401).json({ success: false, msg: "Invalid credentials" });
+      return res.status(401).json({ success: false, msg: "Invalid date of birth" });
     }
 
-    // Auto set ONLINE on login
-    
+    // Auto set ONLINE on login (if you have an onlineStatus field)
+    // staff.onlineStatus = "ONLINE";
     await staff.save();
 
     const token = jwt.sign(
@@ -74,7 +90,6 @@ router.post("/login/staff", async (req, res) => {
         phone: staff.phone,
         department: staff.department,
         role: staff.role,
-        
         rewardPoint: staff.rewardPoint,
       },
     });

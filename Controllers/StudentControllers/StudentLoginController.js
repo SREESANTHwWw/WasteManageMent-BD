@@ -50,18 +50,28 @@ router.post("/create/student", async (req, res) => {
 
 router.post("/login/student", async (req, res) => {
   try {
-    const { admissionNumber, dateOfBirth } = req.body;
+    const { identifier, dateOfBirth } = req.body; // identifier can be admissionNumber OR email
 
     // validation
-    if (!admissionNumber || !dateOfBirth) {
+    if (!identifier || !dateOfBirth) {
       return res.status(400).json({
         success: false,
-        msg: "Admission number and date of birth are required",
+        msg: "Identifier (admission number or email) and date of birth are required",
       });
     }
 
-    // check student exists
-    const student = await StudentsModel.findOne({ admissionNumber });
+    let student;
+
+    // Check if identifier looks like an email (contains '@')
+    const isEmail = identifier.includes('@');
+
+    if (isEmail) {
+      // Search by email
+      student = await StudentsModel.findOne({ email: identifier });
+    } else {
+      // Search by admission number
+      student = await StudentsModel.findOne({ admissionNumber: identifier });
+    }
 
     if (!student) {
       return res.status(404).json({
@@ -70,7 +80,7 @@ router.post("/login/student", async (req, res) => {
       });
     }
 
-    // verify DOB
+    // Verify date of birth
     if (student.dateOfBirth !== dateOfBirth) {
       return res.status(401).json({
         success: false,
@@ -78,16 +88,16 @@ router.post("/login/student", async (req, res) => {
       });
     }
 
-    // create token
-const token = jwt.sign(
-  {
-    id: student._id,
-    role: student.role,        
-    userModel: "Student"
-  },
-  process.env.JWT_SECRET,
-  { expiresIn: "7d" }
-);
+    // Create JWT token
+    const token = jwt.sign(
+      {
+        id: student._id,
+        role: student.role,
+        userModel: "Student"
+      },
+      process.env.JWT_SECRET,
+      { expiresIn: "7d" }
+    );
 
     res.status(200).json({
       success: true,
@@ -96,9 +106,9 @@ const token = jwt.sign(
       student: {
         id: student._id,
         admissionNumber: student.admissionNumber,
+        email: student.email,          // include email in response
         fullName: student.fullName,
-        role:student.role
-       
+        role: student.role
       },
     });
   } catch (error) {
