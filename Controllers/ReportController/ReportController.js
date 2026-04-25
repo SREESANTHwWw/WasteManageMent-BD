@@ -834,25 +834,52 @@ Router.patch("/approve/report/:id", authMiddleware, async (req, res) => {
 // PATCH /reject/report/:id
 Router.patch("/reject/report/:id", authMiddleware, async (req, res) => {
   try {
- 
+    // 1. Only admin can reject reports
+  
 
     const { rejectionReason } = req.body;
-
     const report = await WasteReport.findById(req.params.id);
+
     if (!report) {
       return res.status(404).json({ success: false, msg: "Report not found" });
     }
 
-    if (report.status === "RESOLVED") {
-      return res.status(400).json({ success: false, msg: "Cannot reject a resolved report" });
-    }
     if (report.status === "REJECTED") {
       return res.status(400).json({ success: false, msg: "Report is already rejected" });
     }
 
+    // 2. Handle point deduction if report was self‑cleaned and resolved
+    if (report.status === "RESOLVED" && report.selfCleanedBy) {
+      const userId = report.selfCleanedBy;
+      const userModel = report.selfCleanedByModel; // "Student" or "Staff"
+
+      try {
+        if (userModel === "Student") {
+          await StudentsModel.findByIdAndUpdate(userId, {
+            $inc: { rewardPoint: -100 },
+          });
+        } else if (userModel === "Staff") {
+          await StaffModel.findByIdAndUpdate(userId, {
+            $inc: { rewardPoint: -100 },
+          });
+        }
+        // If user is not found, the deduction is silently skipped,
+        // but the report is still rejected.
+      } catch (pointErr) {
+        console.error("Failed to deduct reward points:", pointErr);
+        // Continue with rejection – do not block the admin action
+      }
+    }
+
+    // 3. Update report status to REJECTED
     const updated = await WasteReport.findByIdAndUpdate(
       req.params.id,
-      { $set: { status: "REJECTED", rejectionReason: rejectionReason || "" } },
+      {
+        $set: {
+          status: "REJECTED",
+          rejectionReason: rejectionReason || "",
+        },
+      },
       { new: true }
     )
       .populate("userId", "fullName email")
@@ -860,10 +887,11 @@ Router.patch("/reject/report/:id", authMiddleware, async (req, res) => {
 
     return res.status(200).json({
       success: true,
-      msg: "Report rejected successfully",
+      msg: "Report rejected successfully" + (report.status === "RESOLVED" && report.selfCleanedBy ? " (100 points deducted)" : ""),
       report: updated,
     });
   } catch (error) {
+    console.error(error);
     return res.status(500).json({ success: false, msg: error.message });
   }
 });
