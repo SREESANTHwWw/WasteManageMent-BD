@@ -751,6 +751,8 @@ Router.patch(
         .populate("userId", "fullName email")
         .lean();
 
+        //Slef reward
+
       // Award +100 reward points
       if (role === "staff") {
         await StaffModel.findByIdAndUpdate(
@@ -782,7 +784,79 @@ Router.patch(
 
 
 
+// ── Step 3: Cancel Self-Clean (Staff + Student) ───────────────────────────────
+// PATCH /self-clean/cancel/:id
+// User cancels an ongoing self-cleaning → reverts status to PENDING,
+// removes self-cleaning fields, no points awarded.
+Router.patch("/self-clean/cancel/:id", authMiddleware, async (req, res) => {
+  try {
+    const { role, id: userId } = req.user;
 
+    if (!["staff", "student"].includes(role)) {
+      return res.status(403).json({
+        success: false,
+        msg: "Only staff and students can cancel self-cleaning",
+      });
+    }
+
+    const report = await WasteReport.findById(req.params.id);
+
+    if (!report) {
+      return res.status(404).json({ success: false, msg: "Report not found" });
+    }
+
+    // Only IN_PROGRESS reports with an active self-clean can be cancelled
+    if (report.status !== "IN_PROGRESS") {
+      return res.status(400).json({
+        success: false,
+        msg: "Only reports that are 'In Progress' can be cancelled",
+      });
+    }
+
+    if (!report.selfCleanedBy) {
+      return res.status(400).json({
+        success: false,
+        msg: "This report was not started as a self-clean task",
+      });
+    }
+
+    // Ensure the same user who started is cancelling
+    if (report.selfCleanedBy.toString() !== userId.toString()) {
+      return res.status(403).json({
+        success: false,
+        msg: "Only the user who started cleaning can cancel it",
+      });
+    }
+
+    // Revert status to PENDING and clear self-clean fields
+    const updated = await WasteReport.findByIdAndUpdate(
+      req.params.id,
+      {
+        $set: {
+          status: "PENDING",
+          selfCleanedBy: null,
+          selfCleanedByModel: null,
+          selfCleanStartedAt: null,
+        },
+      },
+      { new: true }
+    )
+      .populate("userId", "fullName email")
+      .lean();
+
+    return res.status(200).json({
+      success: true,
+      msg: "Self-cleaning cancelled successfully. No points were awarded.",
+      report: updated,
+    });
+  } catch (error) {
+    console.error(error);
+    return res.status(500).json({
+      success: false,
+      msg: error.message || "Internal Server Error",
+    });
+  }
+});
 // ─── ADD THESE ROUTES TO YOUR EXISTING wasteReportRouter.js ─────────────────
 // All routes below require admin role
 
